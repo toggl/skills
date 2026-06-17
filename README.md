@@ -44,5 +44,4 @@ this directory one level deep, so adding a new skill is just a new folder with a
 
 ## License
 
-TODO: add a license before announcing publicly (e.g. MIT) — confirm with Toggl
-legal/ownership. Until then the default is "all rights reserved".
+[MIT](LICENSE) © Toggl
