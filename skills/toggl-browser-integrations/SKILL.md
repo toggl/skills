@@ -363,6 +363,15 @@ confirm the button mounted and landed where intended.
   side panel isn't open on the **exact tab you're driving**; (3) no org selected in
   "Saving to"; (4) anchor didn't match; (5) apply errored — check the side-panel toast.
   Work down that list before touching the selectors.
+- **Wrapper present but renders empty** (it mounted, but `innerHTML` length is 0 and there are
+  **no** `data-toggl-debug-*` attributes) → this is **not** a placement problem. The button's
+  render **threw and was swallowed** by the extension's error boundary, leaving the wrapper with
+  no UI inside. Read the page console — `read_console_messages` with pattern
+  `Uncaught React error|SyntaxError`. A **`SyntaxError`** means an invalid CSS selector or regex
+  from your definition reached the DOM during render (a bad `closest()` / `querySelector()` /
+  `new RegExp()`). The #1 cause is an **`@alias` used for `container`**, which does not accept
+  aliases (§6). The render is also what emits the `data-toggl-debug-*` attributes, so their
+  absence on a *mounted* wrapper confirms a crash rather than a closed panel.
 
 > **Arm a MutationObserver before posting** — it tells you definitively whether Toggl
 > ever injected anything (vs. injected-then-stripped by an SPA re-render), and separates
@@ -501,7 +510,26 @@ If `coveredBy` names a host element, you have a stacking-context problem — see
   plain JSON only.
 - **Brittle selectors:** hashed CSS-module class names (e.g.
   `HeaderMetadata-module__…__Dg2N7`) change between deploys. Prefer `data-testid` /
-  roles; if you must use a generated class, expect to revisit it.
+  roles; if you must use a generated class, expect to revisit it. Stability ranking,
+  best → worst: **semantic / ARIA / `data-*`** (tied to behaviour, most durable) →
+  **stable structure** (`:has()`, child combinators) → **`jsname` / `jscontroller`**
+  (Google's Closure tokens — locale-free and fairly stable, but obfuscated "magic" that
+  can rotate on a deploy) → **hashed CSS classes** (rotate most often). Reach down this
+  list only when nothing higher exists.
+- **`container` does not accept `@alias` references (an alias there crashes the button):**
+  unlike `anchor` and the resolver `closest`/`query` slots — which **do** expand `@name`
+  aliases — `container` is used **as-is** and is never alias-resolved. So `container: "@event-modal"`
+  is matched literally → `@` is invalid CSS → a **`SyntaxError`** during render → the button
+  mounts empty (the §5-A symptom). **Always write `container` as a full inline selector** (e.g.
+  `"container": "div[role='dialog']>span>div"`), never an alias.
+- **Localized-text selectors break outside English:** any selector keyed on *rendered* text —
+  `button[aria-label='Close']`, label text, `:contains(...)` — matches only the locale the
+  author tested. On a `pt-BR` / `de` / `ja` page the same control reads "Fechar" / "Schließen"
+  / "閉じる", the selector matches **0 elements**, and the button never appears. Match on
+  attribute **presence** instead (`[aria-label]`), or a non-text hook (`[role]`, `[data-*]`,
+  structure). **Check the user's locale early** (`document.documentElement.lang`, or just read
+  a known control's `aria-label`) so you don't ship an English-only anchor — the failure is
+  invisible to an English author.
 - **SPA re-renders drop the button or stale the title:** rely on the built-in anchor
   observer for re-mount, and add `subscribe` so the description re-resolves when the
   watched node mutates in place.
@@ -623,11 +651,18 @@ and verify match counts before trusting anything here. Treat them as "where to l
 what shape to expect," not copy-paste config.
 
 - **Google Calendar** (`calendar.google.com`) — the open-event popover/dialog is a single
-  detail surface → `multiple: false`. Anchor near the popover's action row (the icons by
-  the event title); read the title from the event-title heading. Google uses hashed class
-  names, so prefer `[role]` / `aria-label` / `data-*` hooks, and scope resolvers with
-  `container`/`closest` to the open dialog (`[role="dialog"]`) so you don't read the
-  calendar grid behind it.
+  detail surface → `multiple: false`. Read the title **locale-free** from the title container's
+  `data-text` attribute (`div[data-text]:has(span[role='heading'])`, `textAttribute: "data-text"`)
+  — not the heading's `textContent`. Anchor the action toolbar relative to the close button but
+  match `[aria-label]` **presence**, never `[aria-label='Close']` (English-only — see the §6
+  locale pitfall; it injects nothing on non-English calendars). That looser anchor matches
+  several nodes, but `append:"first"` + `multiple:false` consumes the first in document order,
+  and an ancestor always precedes its descendants — so it reliably lands on the outer action
+  cluster. Keep `container` **inline** (`div[role='dialog']>span>div`), never an alias (§6). Add
+  `subscribe: { closest: "@event-modal" }` — with `@event-modal` defined in the top-level
+  `selectors` map (e.g. `"event-modal": "div[aria-modal='true']"`) — so the title re-resolves
+  when you navigate event→event in place. Google uses hashed classes elsewhere, so scope resolvers to the open
+  dialog (`[role="dialog"]` / `[aria-modal="true"]`) to avoid reading the grid behind it.
 - **Trello** (`trello.com`) — two surfaces, two buttons. The **card back** (opened card
   detail) is single (`multiple:false`); anchor in the card-detail header/action list, title
   = card name. **Board cards** are a list (`multiple:true`); one button per card tile, title
