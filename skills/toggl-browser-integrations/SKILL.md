@@ -7,7 +7,7 @@ description: Author, post, and verify a Toggl 2.0 custom website integration (th
 
 A Toggl 2.0 *integration* injects the in-page Toggl 2.0 "Track" button into a
 third-party website (GitHub, Jira, Asana, …) and teaches it how to read a task
-description + metadata from that page's DOM. An integration is a single JSON
+description, project and tags from that page's DOM. An integration is a single JSON
 document. This skill is how
 you author one against a live page, push it into the extension's side panel without
 typing, see the button render, and iterate on selector/placement until it's right —
@@ -153,7 +153,7 @@ it), and the next request simply overwrites it.
 | `name` | ✅ | Human label shown in the Toggl 2.0 UI. | `"GitHub"` |
 | `domain` | ✅ | Host the integration activates on. Supports a `*.` wildcard subdomain. | `"github.com"`, `"*.atlassian.net"`, `"*.notion.so"` |
 | `selectors` | — | Named CSS aliases reused across resolvers/anchors. Reference an alias elsewhere with `@aliasName`. Keeps long selectors DRY. | `{ "issue-viewer": "div[data-testid=\"issue-viewer-container\"]" }` |
-| `resolvers` | — | Named recipes for **reading text** out of the page (the task description, project, tags, …). Referenced by key from a button's `description`/`metadata`. See §3.3. | see §3.3 |
+| `resolvers` | — | Named recipes for **reading text** out of the page (the task description, project, tags, …). Referenced by key from a button's `description`, `task`, `project` or `tags`. See §3.3. | see §3.3 |
 | `buttons` | ✅ | One or more button placements. Most sites need several (detail view vs. list row vs. board card). See §3.2. | array of buttons |
 | `cssContent` | — | Inline CSS string injected with the button. Use for small per-site layout tweaks. | `".toggl-wrapper{margin:0 4px}"` |
 | `themeDetector` | — | Makes the button follow the host page's light/dark theme. `colorElement`: element whose background determines theme; `watchElement` (opt): element to observe for theme flips. | `{ "colorElement": "body" }` |
@@ -189,9 +189,12 @@ Behaviour:
 | `quickLog` | Enable the quick-log affordance on the button. |
 | `subscribe` | An element-selector the button **watches for mutations** to re-resolve its description — needed on SPAs where the title node updates in place (e.g. Jira navigating issue→issue). |
 | `description` | What the button tracks as the task title. A **locator** (§3.3). |
-| `metadata` | Extra fields (project, tags, …) read off the page. A map of name → locator (§3.3). |
+| `task` | Task name, when it should differ from `description`. A locator. |
+| `project` | Project name. A locator. Matched exactly, so casing matters. |
+| `tags` | Tag names. A locator — see §3.3 for how tags differ from every other field. |
+| `metadata` | **Legacy — do not use for new work.** Only `metadata.project` is still read, as a fallback for `project`. Everything else in it (including `metadata.tags`) resolves to nothing. |
 
-### 3.3 Reading text: resolvers, locators, metadata
+### 3.3 Reading text: resolvers, locators, field mapping
 
 A **resolver** (entry in top-level `resolvers`) locates one piece of text. Kinds:
 
@@ -204,25 +207,62 @@ A **resolver** (entry in top-level `resolvers`) locates one piece of text. Kinds
 - **URL** — `{ "url": "path" | "query" | "hash", "regex": "...", "replace": "..." }` — read from the location (e.g. Jira's `urlKey` from `/browse/ABC-1`).
 - **Literal** — `{ "literal": "fixed text" }`.
 
-A **locator** (a button's `description` / a `metadata` entry) assembles resolvers into
+A **locator** (the value of a button's `description`, `task`, `project` or `tags`) assembles resolvers into
 the final string. Forms, simplest → richest:
 
 ```jsonc
 "description": "issueTitle"                          // one resolver by key
-"description": ["#", "number", ": ", "description"]  // array = concatenated; bare strings are literals
-"description": { "resolvers": ["issueKey", " ", "issueTitle"] }   // object form
-"description": [ { "resolvers": [...] }, { "resolvers": [...] } ] // ordered fallbacks: first non-empty wins
+"description": { "resolvers": ["#", "number", ": ", "description"] }  // concatenated; bare strings are literals
+"description": [ { "resolvers": [...] }, { "resolvers": [...] } ]     // ordered fallbacks: first non-empty wins
 ```
 
-`metadata` maps a field name to a locator; add `"multiple": true` to collect several
-(e.g. tags):
+Map a Toggl field by naming it directly on the button. The key is the Toggl field,
+the value is a locator:
 
 ```jsonc
-"metadata": {
-  "project": { "locators": { "resolvers": ["detailProject"] } },
-  "tags":    { "multiple": true, "locators": { "resolvers": ["detailTags"] } }
-}
+"description": { "resolvers": ["issueKey", " ", "issueTitle"] },
+"project":     ["repoProject"],
+"tags":        ["labelTag", "stateTag"]
 ```
+
+**`tags` behaves differently from every other field.** Other fields read a list as
+ordered fallbacks — first non-empty wins. `tags` reads it as a **union**: every entry
+contributes, and one resolver matching several elements produces one tag each.
+Duplicates are dropped case-insensitively.
+
+**`field:value` tags need `regex` + `replace`, not literals.** Writing
+`"tags": ["Status:", "status"]` produces *two* tags — `Status:` and `To Do` — because
+every part becomes its own tag, and `join` is ignored for tags. Build the label into
+the value instead:
+
+```jsonc
+"resolvers": {
+  "statusTag": {
+    "root": true,
+    "query": "[data-testid='status-text']",
+    "regex": "^(.*)$",
+    "replace": "Status:$1"
+  }
+},
+"tags": ["statusTag"]
+```
+
+`replace` also strips: `"regex": "^.*/(.*)$", "replace": "$1"` turns
+`Support/Jane` into `Jane`. With no capture group the replacement is used literally
+(`"regex": "/issues/", "replace": "Kind:Issue"`). No match produces no value at all.
+
+> **Mapped values are task state, written once.** `project` and `tags` are applied
+> when the backend *creates* the task, never on a later match. So
+> test a new mapping on an item that has never been tracked, and expect a value that
+> changes upstream (a status moving on) to stay stale on the task. The time entry
+> carries only its own description, start, duration and billable — it shows the
+> project and tags by inheriting them from the task.
+
+> **An org setting can suppress the *creation* half.** If an admin has turned off
+> *Create missing tasks, projects and tags* in the extension's Integrations screen,
+> missing entities are not created — but existing ones still resolve, so a mapped
+> project that already exists in Toggl still lands. Worth checking before debugging a
+> mapping whose values are absent only for items that are new to Toggl.
 
 > Selector aliasing: any CSS-selector slot (`anchor`, `closest`, `query`, …) accepts
 > `@aliasName` to pull the selector from the top-level `selectors` map.
@@ -230,7 +270,7 @@ the final string. Forms, simplest → richest:
 ### 3.4 A complete minimal example
 
 The smallest thing worth posting: one button on a detail view that tracks a title.
-Start here, confirm it renders, then layer on metadata and more buttons.
+Start here, confirm it renders, then layer on project/tags mappings and more buttons.
 
 ```jsonc
 {
@@ -265,7 +305,7 @@ document.documentElement.setAttribute(
 ```
 
 Then verify with the §5 snippet — expect exactly one `task-detail` wrapper inside the
-toolbar. Once it's placed, add `metadata` (project/tags), `autoTrack`, or a second
+toolbar. Once it's placed, add `project`/`tags` mappings, `autoTrack`, or a second
 button for the list/board view.
 
 ---
@@ -298,7 +338,8 @@ can't reliably infer from the DOM:
   actually one row of a list that's currently filtered to one). Otherwise state your
   inference and let the user correct it: "I see 10 cards, so I'll put a button on each —
   shout if you only want it on one."
-- **Metadata** (optional) — project, tags, anything else worth capturing.
+- **Field mapping** (optional) — project and tags. Those are the only fields a button
+  can fill besides the title; there is no general "extra metadata" channel.
 
 Restate your understanding in one or two sentences and get an explicit **confirm**
 before building. This is the gate the whole loop hangs on.
@@ -439,7 +480,10 @@ what that button resolved — read them instead of hovering/screenshotting:
   button:      n.dataset.togglDebugButton,
   anchor:      n.dataset.togglDebugAnchor,
   description: n.dataset.togglDebugDescription,                      // the tracked title
-  metadata:    JSON.parse(n.dataset.togglDebugMetadata  || '{}'),
+  task:        n.dataset.togglDebugTask,
+  project:     n.dataset.togglDebugProject,
+  tags:        JSON.parse(n.dataset.togglDebugTags     || '[]'),
+  metadata:    JSON.parse(n.dataset.togglDebugMetadata || '{}'),     // legacy, usually empty
   resolvers:   JSON.parse(n.dataset.togglDebugResolvers || '{}'),    // { alias: { matched, text } }
 }));
 ```
@@ -450,6 +494,12 @@ is `false` (its selector found **no element** → fix the `query`/`closest`) ver
 resolved values in one call — confirm they differ per card (proves `closest` scoping). If
 the `data-toggl-debug-*` attributes are absent, the side panel isn't open. (Hovering/opening
 the button still works as a visual cross-check.)
+
+> ⚠️ **These attributes can under-report.** They are written when the button first
+> mounts. On apps whose side panels or field pickers load *after* the button — Zendesk
+> is the known case — `project`/`tags` can read empty while a real start resolves them
+> fine. If the attributes look wrong but the selectors match in the console, start a
+> timer and read the popover before concluding the mapping is broken.
 
 **D. Is it actually *clickable*? (visible ≠ clickable).** A button can render perfectly
 in a screenshot yet sit *under* another element at its center point, so clicks never
