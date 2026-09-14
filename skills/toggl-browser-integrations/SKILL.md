@@ -188,8 +188,9 @@ Behaviour:
 | `autoTrack` | Start tracking automatically when the page/item is detected (vs. requiring a click). |
 | `quickLog` | Enable the quick-log affordance on the button. |
 | `subscribe` | An element-selector the button **watches for mutations** to re-resolve its description — needed on SPAs where the title node updates in place (e.g. Jira navigating issue→issue). |
-| `description` | What the button tracks as the task title. A **locator** (§3.3). |
+| `description` | What the button tracks as the **task** title. A **locator** (§3.3). Despite the name it does *not* fill the time entry's own description — that is `note`. |
 | `task` | Task name, when it should differ from `description`. A locator. |
+| `note` | The **time entry's** own description — the *"What are you working on?"* text. A locator. Omit it and the entry has none; see §3.3. |
 | `project` | Project name. A locator. Matched exactly, so casing matters. |
 | `tags` | Tag names. A locator — see §3.3 for how tags differ from every other field. |
 | `metadata` | **Legacy — do not use for new work.** Only `metadata.project` is still read, as a fallback for `project`. Everything else in it (including `metadata.tags`) resolves to nothing. |
@@ -207,7 +208,7 @@ A **resolver** (entry in top-level `resolvers`) locates one piece of text. Kinds
 - **URL** — `{ "url": "path" | "query" | "hash", "regex": "...", "replace": "..." }` — read from the location (e.g. Jira's `urlKey` from `/browse/ABC-1`).
 - **Literal** — `{ "literal": "fixed text" }`.
 
-A **locator** (the value of a button's `description`, `task`, `project` or `tags`) assembles resolvers into
+A **locator** (the value of a button's `description`, `task`, `project`, `tags` or `note`) assembles resolvers into
 the final string. Forms, simplest → richest:
 
 ```jsonc
@@ -229,6 +230,22 @@ the value is a locator:
 ordered fallbacks — first non-empty wins. `tags` reads it as a **union**: every entry
 contributes, and one resolver matching several elements produces one tag each.
 Duplicates are dropped case-insensitively.
+
+**`note` fills the entry, everything else fills the task.** A time entry started from
+the button has **no description of its own** by default — it is identified by its task,
+which the row already shows, so copying the task name there would print the same string
+twice. Map `note` when the entry should read differently from the task:
+
+```jsonc
+"description": { "resolvers": ["issueKey", " ", "issueTitle"] },  // task: SCRUM-3 Fix the bug
+"note":        ["issueKey"]                                       // entry: SCRUM-3
+```
+
+Precedence, most specific first: what the user typed in the popover → the `note`
+mapping → nothing. Don't add `note` just to echo the title; only map it when the two
+should differ. One case needs no mapping at all: a start that ends up **taskless**
+(nothing matched and task creation is off) is titled from the page text server-side,
+because that entry has nothing else to identify it.
 
 **`field:value` tags need `regex` + `replace`, not literals.** Writing
 `"tags": ["Status:", "status"]` produces *two* tags — `Status:` and `To Do` — because
@@ -257,6 +274,10 @@ the value instead:
 > changes upstream (a status moving on) to stay stale on the task. The time entry
 > carries only its own description, start, duration and billable — it shows the
 > project and tags by inheriting them from the task.
+>
+> `note` is the exception, because it writes the entry's own description rather than
+> task state: it is resolved on **every** start, so a value that changes upstream is
+> current on each new entry.
 
 > **An org setting can suppress the *creation* half.** If an admin has turned off
 > *Create missing tasks, projects and tags* in the extension's Integrations screen,
@@ -338,8 +359,9 @@ can't reliably infer from the DOM:
   actually one row of a list that's currently filtered to one). Otherwise state your
   inference and let the user correct it: "I see 10 cards, so I'll put a button on each —
   shout if you only want it on one."
-- **Field mapping** (optional) — project and tags. Those are the only fields a button
-  can fill besides the title; there is no general "extra metadata" channel.
+- **Field mapping** (optional) — project, tags, and `note` if the time entry should read
+  differently from the task name. Those are the only fields a button can fill besides
+  the title; there is no general "extra metadata" channel.
 
 Restate your understanding in one or two sentences and get an explicit **confirm**
 before building. This is the gate the whole loop hangs on.
