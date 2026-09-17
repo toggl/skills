@@ -39,6 +39,11 @@ browser state and the side panel.
   a click or grabbing focus). If `javascript_tool` actions, clicks, or the post bridge
   behave erratically and the §6 tab checks are all clean, suspect a third-party
   extension and ask the user to disable everything except Claude + Toggl, then retry.
+- **A separate Chrome profile is a separate install of the extension.** If the user
+  set one up for this session, the organization's integrations still reach it: the side
+  panel pulls them when it opens, and a save reuses the org's existing record for the
+  domain. So an integration saved from their everyday profile shows up here as
+  `kind: 'custom'` (§2) — edit it in place rather than authoring a second one.
 
 **Per session — split the work:**
 
@@ -133,7 +138,9 @@ JSON.parse(document.documentElement.getAttribute('data-toggl-focus-current') || 
 - `kind: 'custom'` → an editable org integration; its id is preserved, so tweak the
   `definition` and **re-post it (above) to update the same record** in place.
 - `kind: 'native'` → a built-in; editing forks a fresh custom override (mirror its shape).
-- `kind: 'none'` → nothing matched — author from scratch (§3).
+- `kind: 'none'` → nothing matched — author from scratch (§3). The panel pulls the
+  organization's integrations when it opens, so `none` with the panel open means the org
+  really has nothing for this domain, not that another install's save is missing here.
 - `gated: true` → the side panel isn't open (this read is only answered while it is, i.e.
   *authoring mode*). Ask the user to open the panel on this tab, then retry.
 
@@ -149,7 +156,7 @@ it), and the next request simply overwrites it.
 
 | Field | Req | Purpose | Example |
 |---|---|---|---|
-| `id` | ✅ | Stable identifier. Use a fresh **UUID** (`crypto.randomUUID()`). When posting, the panel **keeps the form's own id** and ignores the one in your JSON, so the value is cosmetic during authoring — but use a UUID anyway. | a UUID |
+| `id` | ✅ | Stable identifier. Use a fresh **UUID** (`crypto.randomUUID()`). When posting, the panel **keeps the form's own id** and ignores the one in your JSON, so the value is cosmetic during authoring — but use a UUID anyway. On save the panel also reuses the org's existing record for the domain, so one domain never ends up with two integrations. | a UUID |
 | `name` | ✅ | Human label shown in the Toggl 2.0 UI. | `"GitHub"` |
 | `domain` | ✅ | Host the integration activates on. Supports a `*.` wildcard subdomain. | `"github.com"`, `"*.atlassian.net"`, `"*.notion.so"` |
 | `selectors` | — | Named CSS aliases reused across resolvers/anchors. Reference an alias elsewhere with `@aliasName`. Keeps long selectors DRY. | `{ "issue-viewer": "div[data-testid=\"issue-viewer-container\"]" }` |
